@@ -1,5 +1,5 @@
 name: model-quality
-on: pull_request
+on: workflow_dispatch
 secrets:
   DATABRICKS_HOST_URL:
     description:   'Databricks workspace URL'
