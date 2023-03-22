@@ -25,7 +25,7 @@ jobs:
           
       - name: Run job to check model quality in stage workspace
         run:  |
-          databricks jobs list
+          databricks workspace list
         
         
       
