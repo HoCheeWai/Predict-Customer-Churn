@@ -1,0 +1,38 @@
+name: model-quality
+on: pull_request
+secrets:
+  DATABRICKS_HOST_URL:
+    description:   'Databricks workspace URL'
+    required: true
+  DATABRICKS_TOKEN:
+    description: 'Access token for Databricks CLI'
+    required: true
+jobs:
+  check-model-quality:
+    runs-on: ubuntu-latest
+  
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v3
+    
+      - name: Set up python
+        user: actions/setup-python@v4
+        with:
+          python-version: 3.9
+ 
+      - name: Databricks CLI config
+        run:  |
+          pip install databricks-cli
+          cat > ~/.databrickscfg << EOF
+          [DEFAULT]
+          host = ${{ secrets.DATABRICKS_HOST_URL }}
+          token = ${{ secrets.DATABRICKS_TOKEN }}
+          jobs-api-version = 2.1
+          EOF
+          
+      - name: Run job to check model quality in stage workspace
+        run:  |
+          databricks jobs list
+        
+        
+      
