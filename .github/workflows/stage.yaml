@@ -18,8 +18,8 @@ jobs:
           pip install databricks-cli
           cat > ~/.databrickscfg << EOF
           [DEFAULT]
-          host = ${{ secrets.DATABRICKS_HOST_URL }}
-          token = ${{ secrets.DATABRICKS_TOKEN }}
+          host = ${{ secrets.DATABRICKS_HOST_URL_STAGE }}
+          token = ${{ secrets.DATABRICKS_TOKEN_STAGE }}
           jobs-api-version = 2.1
           EOF
           
