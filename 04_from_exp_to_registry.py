@@ -19,6 +19,44 @@
 
 # COMMAND ----------
 
+import mlflow.sklearn
+from mlflow.entities import ViewType
+
+# For testing, allow manual run to collect parameters
+dbutils.widgets.text('model_registry_secret_scope', '')
+dbutils.widgets.text('model_registry_secret_key_prefix', '')
+dbutils.widgets.text('run_id', '')
+ 
+mr_scope = str(dbutils.widgets.get('model_registry_secret_scope'))
+mr_key = str(dbutils.widgets.get('model_registry_secret_key_prefix'))
+run_id = str(dbutils.widgets.get('run_id'))
+
+if len(mr_scope.strip()) == 0:
+    mr_scope = 'prod' # default to prod registry
+if len(mr_key.strip()) == 0:
+    mr_key = 'prod'
+
+# Create the URIs to use to work with the remote Feature Store and Model Registry
+model_registry_uri = f'databricks://{mr_scope}:{mr_key}' if mr_scope and mr_key else None
+       
+if len(run_id.strip()) == 0:
+   run_id = dbutils.jobs.taskValues.get(taskKey = "Train_model", key = "run_id", debugValue = 0)
+
+if run_id == 0 or run_id is None:
+    all_experiments = [exp.experiment_id for exp in mlflow.search_experiments()]
+    runs = mlflow.search_runs(
+        experiment_ids = all_experiments,
+        filter_string = 'metrics.test_accuracy_score > 0.78 and status = "FINISHED" and ' +
+            'tags.mlflow.runName = "lgbm predict churn"',
+        run_view_type = ViewType.ACTIVE_ONLY,
+    )
+    run_id = runs.loc[runs['end_time'].idxmax()]['run_id']
+
+display (run_id)
+
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ### How to Use the Model Registry
 # MAGIC Typically, data scientists who use MLflow will conduct many experiments, each with a number of runs that track and log metrics and parameters. During the course of this development cycle, they will select the best run within an experiment and register its model with the registry.  Think of this as **committing** the model to the registry, much as you would commit code to a version control system.  
@@ -45,14 +83,13 @@ from mlflow.tracking import MlflowClient
 
 client = MlflowClient()
 
-run_id = 'fe8bbfadaebd4816951d5e1972e57b4e' # replace with your own run ID, etc
-model_name = "demo_churn"
+model_name = "telco_churn"
 model_uri = f"runs:/{run_id}/model"
+mlflow.set_registry_uri(model_registry_uri)
+model_details = mlflow.register_model(model_uri, model_name)
 
 client.set_tag(run_id, key='db_table', value='ibm_telco_churn.churn_features')
 client.set_tag(run_id, key='demographic_vars', value='SeniorCitizen,gender_Female')
-
-model_details = mlflow.register_model(model_uri, model_name)
 
 # COMMAND ----------
 
@@ -85,51 +122,14 @@ client.update_model_version(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC #### Request Transition to Staging
+# MAGIC #### Transition to Staging
 # MAGIC 
 # MAGIC <!--<img src="https://github.com/RafiKurlansik/laughing-garbanzo/blob/main/webhooks2.png?raw=true" width = 800> -->
 
 # COMMAND ----------
 
-# Helper functions
-import mlflow
-from mlflow.utils.rest_utils import http_request
-import json
-
-def client():
-  return mlflow.tracking.client.MlflowClient()
-
-host_creds = client()._tracking_client.store.get_host_creds()
-host = host_creds.host
-token = host_creds.token
-
-def mlflow_call_endpoint(endpoint, method, body='{}'):
-  if method == 'GET':
-      response = http_request(
-          host_creds=host_creds, endpoint="/api/2.0/mlflow/{}".format(endpoint), method=method, params=json.loads(body))
-  else:
-      response = http_request(
-          host_creds=host_creds, endpoint="/api/2.0/mlflow/{}".format(endpoint), method=method, json=json.loads(body))
-  return response.json()
-
-# COMMAND ----------
-
-# DBTITLE 1,Transition request triggers testing job 
-# Transition request to staging
-staging_request = {'name': model_name,
-                   'version': model_details.version,
-                   'stage': 'Staging',
-                   'archive_existing_versions': 'true'}
-
-mlflow_call_endpoint('transition-requests/create', 'POST', json.dumps(staging_request))
-
-# COMMAND ----------
-
-# DBTITLE 1,This comment appears in model registry
-# Leave a comment for the ML engineer who will be reviewing the tests
-comment = "This was the best model from AutoML, I think we can use it as a baseline."
-comment_body = {'name': model_name, 'version': model_details.version, 'comment': comment}
-mlflow_call_endpoint('comments/create', 'POST', json.dumps(comment_body))
-
-# COMMAND ----------
-
+# Using mlflow REST API, a request for transition to staging was made. However, this seem to 
+# have challenges updating the model registry in different work.
+# Using python API, the transition is direct, there is no request
+# There is also no equivalent as the REST API to add comments to a version
+client.transition_model_version_stage(model_details.name, model_details.version, "staging")
