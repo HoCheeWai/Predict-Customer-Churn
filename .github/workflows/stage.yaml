@@ -1,0 +1,31 @@
+name: model-quality
+on: workflow_dispatch
+jobs:
+  check-model-quality:
+    runs-on: ubuntu-latest
+  
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v3
+    
+      - name: Set up python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+ 
+      - name: Databricks CLI config
+        run:  |
+          pip install databricks-cli
+          cat > ~/.databrickscfg << EOF
+          [DEFAULT]
+          host = ${{ secrets.DATABRICKS_HOST_URL_STAGE }}
+          token = ${{ secrets.DATABRICKS_TOKEN_STAGE }}
+          jobs-api-version = 2.1
+          EOF
+          
+      - name: Run job to check model quality in stage workspace
+        run:  |
+          databricks workspace list
+        
+        
+      
