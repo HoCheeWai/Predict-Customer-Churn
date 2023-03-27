@@ -15,24 +15,63 @@ import mlflow, json
 from mlflow.tracking import MlflowClient
 from databricks.feature_store import FeatureStoreClient
 
-client = MlflowClient()
+# For testing, allow manual run to collect parameters
+dbutils.widgets.text('model_registry_secret_scope', '')
+dbutils.widgets.text('model_registry_secret_key_prefix', '')
+dbutils.widgets.text('expt_run_id', '')
+ 
+mr_scope = str(dbutils.widgets.get('model_registry_secret_scope'))
+mr_key = str(dbutils.widgets.get('model_registry_secret_key_prefix'))
+run_id = str(dbutils.widgets.get('expt_run_id'))
+
+if len(mr_scope.strip()) == 0:
+    mr_scope = 'prod' # default to prod registry
+if len(mr_key.strip()) == 0:
+    mr_key = 'prod'
+
+# Create the URIs to use to work with the remote Model Registry
+model_registry_uri = f'databricks://{mr_scope}:{mr_key}' if mr_scope and mr_key else None
+
+client = MlflowClient(registry_uri = model_registry_uri)
 fs = FeatureStoreClient()
+       
+if len(run_id.strip()) == 0:
+   run_id = dbutils.jobs.taskValues.get(taskKey = "Train", key = "run_id", debugValue = 0)
 
-# After receiving payload from webhooks, use MLflow client to retrieve model details and lineage
-try:
-  registry_event = json.loads(dbutils.widgets.get('event_message'))
-  model_name = registry_event['model_name']
-  model_version = registry_event['version']
-  if 'to_stage' in registry_event and registry_event['to_stage'] != 'Staging':
-    dbutils.notebook.exit()
-except Exception:
-  model_name = 'rk_churn'
-  model_version = "1"
-print(model_name, model_version)
+if run_id == 0 or run_id is None:
+    all_experiments = [exp.experiment_id for exp in mlflow.search_experiments()]
+    runs = mlflow.search_runs(
+        experiment_ids = all_experiments,
+        filter_string = 'metrics.test_accuracy_score > 0.78 and status = "FINISHED" and ' +
+            'tags.mlflow.runName = "lgbm predict churn"',
+        run_view_type = ViewType.ACTIVE_ONLY,
+    )
+    run_id = runs.loc[runs['end_time'].idxmax()]['run_id']
 
-# Use webhook payload to load model details and run info
-model_details = client.get_model_version(model_name, model_version)
-run_info = client.get_run(run_id=model_details.run_id)
+display (run_id)
+
+# Get the latest version
+model_name = "telco_churn"
+mlflow.set_registry_uri(model_registry_uri)
+model_details = client.get_latest_versions(name = model_name, stages = ["staging"])
+run_info = client.get_run(run_id)
+
+model_version = 0
+model_latest_run_id = 0
+for m in model_details:
+    print("\nname: {}".format(m.name))
+    print("latest version: {}".format(m.version))
+    print("run_id: {}".format(m.run_id))
+    print("current_stage: {}\n".format(m.current_stage))
+    model_version =  m.version
+    model_latest_run_id = m.run_id
+    model_desc =  m.description
+
+display (run_info)
+
+if run_id != model_latest_run_id:
+    print("\nLatest run_id from model_registry {} and run_id from parameters {} differs".format(latest_run_id, run_id))
+    print("\n will proceed with the run_id from parameters")
 
 # COMMAND ----------
 
@@ -41,22 +80,47 @@ run_info = client.get_run(run_id=model_details.run_id)
 
 # COMMAND ----------
 
-# Read from feature store prod table?
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+# Read from feature store
 data_source = run_info.data.tags['db_table']
 features = fs.read_table(data_source)
+features = features.withColumn("TotalCharges", features.TotalCharges.cast('double'))
+display(features)
+
+loaded_model = mlflow.pyfunc.load_model(f'models:/{model_name}/Staging')
+
+df = features.toPandas()
+X = df.drop(['churn', 'customerID'], axis=1)
+y = df.churn
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = 0)
+
+try:
+    lgb_pred = loaded_model.predict(X_test)
+    accuracy=accuracy_score(lgb_pred, y_test)
+    print('LightGBM Model accuracy score: {0:0.4f}'.format(accuracy_score(y_test, lgb_pred)))
+    client.set_model_version_tag(name=model_name, version=model_version, key="predicts", value=1)
+except Exception:
+    print("Unable to predict on features.")
+    client.set_model_version_tag(name=model_name, version=model_version, key="predicts", value=0)
+    pass 
 
 # Load model as a Spark UDF
-model_uri = f'models:/{model_name}/{model_version}'
-loaded_model = mlflow.pyfunc.spark_udf(spark, model_uri=model_uri)
-
+# Not able to predict using Spark. It says, IllegalStateException: Cmd gets aborted by kernel which may be in a bad state
+# There is some issue with the seniorCitizen column. Screen captures at "Databricks_auto_retrain.docx"
+# It could be because the mode was NOT trained using the feature store
+# model_uri = f'models:/{model_name}/{model_version}' 
+# loaded_model = mlflow.pyfunc.spark_udf(spark, model_uri=model_uri)
 # Predict on a Spark DataFrame
-try:
-  display(features.withColumn('predictions', loaded_model(*features.columns)))
-  client.set_model_version_tag(name=model_name, version=model_version, key="predicts", value=1)
-except Exception: 
-  print("Unable to predict on features.")
-  client.set_model_version_tag(name=model_name, version=model_version, key="predicts", value=0)
-  pass
+
+# try:
+#    display(features.withColumn('predictions', loaded_model(*features.columns)))
+#    client.set_model_version_tag(name=model_name, version=model_version, key="predicts", value=1)
+# except Exception: 
+#    print("Unable to predict on features.")
+#    client.set_model_version_tag(name=model_name, version=model_version, key="predicts", value=0)
+#   pass
 
 # COMMAND ----------
 
@@ -85,13 +149,17 @@ else:
 # COMMAND ----------
 
 import numpy as np
-features = features.withColumn('predictions', loaded_model(*features.columns)).toPandas()
-features['accurate'] = np.where(features.churn == features.predictions, 1, 0)
+df['prediction'] = loaded_model.predict(df)
+
+# Did not use SPARK dataframe, see comments in previous para
+# features = features.withColumn('predictions', loaded_model(*features.columns)).toPandas()
+
+df['accurate'] = np.where(df.churn == df.prediction, 1, 0)
 
 # Check run tags for demographic columns and accuracy in each segment
 try:
   demographics = run_info.data.tags['demographic_vars'].split(",")
-  slices = features.groupby(demographics).accurate.agg(acc = 'sum', obs = lambda x:len(x), pct_acc = lambda x:sum(x)/len(x))
+  slices = df.groupby(demographics).accurate.agg(acc = 'sum', obs = lambda x:len(x), pct_acc = lambda x:sum(x)/len(x))
   
   # Threshold for passing on demographics is 55%
   demo_test = "pass" if slices['pct_acc'].any() > 0.55 else "fail"
@@ -120,11 +188,10 @@ except KeyError:
 
 # COMMAND ----------
 
-# If there's no description or an insufficient number of charaters, tag accordingly
-if not model_details.description:
+if not model_desc:
   client.set_model_version_tag(name=model_name, version=model_version, key="has_description", value=0)
   print("Did you forget to add a description?")
-elif not len(model_details.description) > 20:
+elif not len(model_desc) > 20:
   client.set_model_version_tag(name=model_name, version=model_version, key="has_description", value=0)
   print("Your description is too basic, sorry.  Please resubmit with more detail (40 char min).")
 else:
@@ -146,7 +213,7 @@ if not os.path.exists(local_dir):
     os.mkdir(local_dir)
 
 # Download artifacts from tracking server - no need to specify DBFS path here
-local_path = client.download_artifacts(run_info.info.run_id, "", local_dir)
+local_path = mlflow.artifacts.download_artifacts(run_id = run_id, artifact_path = "")
 
 # Tag model version as possessing artifacts or not
 if not os.listdir(local_path):
@@ -172,80 +239,16 @@ results.tags
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Notify the Slack channel with the same webhook used to alert on transition change in MLflow.
-
-# COMMAND ----------
-
-# %run ./Includes/Slack-Webhook
-
-# COMMAND ----------
-
-# import requests, json
-
-# slack_message = "Registered model '{}' version {} baseline test results: {}".format(model_name, model_version, results.tags)
-# #slack_webhook = dbutils.secrets.get("rk_webhooks", "slack")
-
-# body = {'text': slack_message}
-#response = requests.post(
-#    slack_webhook, data=json.dumps(body),
-#    headers={'Content-Type': 'application/json'}
-# )
-# if response.status_code != 200:
-#    raise ValueError(
-#        'Request to slack returned an error %s, the response is:\n%s'
-#        % (response.status_code, response.text)
-# )
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Move to Staging or Archived
+# MAGIC ## Leave in Staging or move to Archived
 # MAGIC 
 # MAGIC The next phase of this models' lifecycle will be to `Staging` or `Archived`, depending on how it fared in testing.
 
 # COMMAND ----------
 
-# Helper functions
-import mlflow
-from mlflow.utils.rest_utils import http_request
-import json
-
-def client():
-  return mlflow.tracking.client.MlflowClient()
-
-host_creds = client()._tracking_client.store.get_host_creds()
-host = host_creds.host
-token = host_creds.token
-
-def mlflow_call_endpoint(endpoint, method, body='{}'):
-  if method == 'GET':
-      response = http_request(
-          host_creds=host_creds, endpoint="/api/2.0/mlflow/{}".format(endpoint), method=method, params=json.loads(body))
-  else:
-      response = http_request(
-          host_creds=host_creds, endpoint="/api/2.0/mlflow/{}".format(endpoint), method=method, json=json.loads(body))
-  return response.json()
-
-
-# COMMAND ----------
-
 # If any checks failed, reject and move to Archived
-if '0' in results or 'fail' in results: 
-  reject_request_body = {'name': model_details.name, 
-                         'version': model_details.version, 
-                         'stage': 'Staging', 
-                         'comment': 'Tests failed - check the tags or the job run to see what happened.'}
-  
-  mlflow_call_endpoint('transition-requests/reject', 'POST', json.dumps(reject_request_body))
-  
-else: 
-  approve_request_body = {'name': model_details.name,
-                          'version': model_details.version,
-                          'stage': 'Staging',
-                          'archive_existing_versions': 'true',
-                          'comment': 'All tests passed!  Moving to staging.'}
-  
-  mlflow_call_endpoint('transition-requests/approve', 'POST', json.dumps(approve_request_body))
-
-# COMMAND ----------
-
+if '0' in results or 'fail' in results:
+    client.transition_model_version_stage(model_details.name, model_details.version, "archived")
+    client.set_model_version_tag(name=model_name, version=model_version, key = "overall status", value = "Please check tags to reassess")
+else:
+    client.set_model_version_tag(name=model_name, version=model_version, key = "overall status", value = "May proceed to cut a release")
+    print ("All tests passed! May proceed to cut a release.")
