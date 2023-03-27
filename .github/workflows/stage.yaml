@@ -1,7 +1,7 @@
 name: model-quality
 on: 
   pull_request:
-    branches: -main
+    branches: [main]
 jobs:
   check-model-quality:
     runs-on: ubuntu-latest
