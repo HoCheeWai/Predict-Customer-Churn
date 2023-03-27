@@ -25,7 +25,7 @@ jobs:
           
       - name: Run job to check model quality in stage workspace
         run:  |
-          databricks workspace list
+          databricks jobs run-now --job-id 608183913960134
         
         
       
