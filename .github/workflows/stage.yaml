@@ -1,5 +1,7 @@
 name: model-quality
-on: workflow_dispatch
+on: 
+  pull_request:
+    branches: -main
 jobs:
   check-model-quality:
     runs-on: ubuntu-latest
