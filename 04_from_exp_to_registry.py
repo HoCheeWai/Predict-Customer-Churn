@@ -25,22 +25,22 @@ from mlflow.entities import ViewType
 # For testing, allow manual run to collect parameters
 dbutils.widgets.text('model_registry_secret_scope', '')
 dbutils.widgets.text('model_registry_secret_key_prefix', '')
-dbutils.widgets.text('run_id', '')
+dbutils.widgets.text('expt_run_id', '')
  
 mr_scope = str(dbutils.widgets.get('model_registry_secret_scope'))
 mr_key = str(dbutils.widgets.get('model_registry_secret_key_prefix'))
-run_id = str(dbutils.widgets.get('run_id'))
+run_id = str(dbutils.widgets.get('expt_run_id'))
 
 if len(mr_scope.strip()) == 0:
     mr_scope = 'prod' # default to prod registry
 if len(mr_key.strip()) == 0:
     mr_key = 'prod'
 
-# Create the URIs to use to work with the remote Feature Store and Model Registry
+# Create the URIs to use to work with the remote Model Registry
 model_registry_uri = f'databricks://{mr_scope}:{mr_key}' if mr_scope and mr_key else None
        
 if len(run_id.strip()) == 0:
-   run_id = dbutils.jobs.taskValues.get(taskKey = "Train_model", key = "run_id", debugValue = 0)
+   run_id = dbutils.jobs.taskValues.get(taskKey = "Train", key = "run_id", debugValue = 0)
 
 if run_id == 0 or run_id is None:
     all_experiments = [exp.experiment_id for exp in mlflow.search_experiments()]
@@ -53,7 +53,6 @@ if run_id == 0 or run_id is None:
     run_id = runs.loc[runs['end_time'].idxmax()]['run_id']
 
 display (run_id)
-
 
 # COMMAND ----------
 

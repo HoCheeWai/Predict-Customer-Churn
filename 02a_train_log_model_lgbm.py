@@ -31,9 +31,11 @@ from sklearn.metrics import accuracy_score
 import lightgbm as lgb
 
 mlflow.autolog()
-#mlflow.sklearn.autolog(disable=True)
 mlflow.sklearn.autolog(log_input_examples=True, silent=True)
 mlflow.end_run()
+
+curr_user = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+mlflow.set_experiment("/Users/" + curr_user + "/02a_train_log_model_lgbm")
 
 with mlflow.start_run(run_name='lgbm predict churn') as run:
     # Extract features & labels
