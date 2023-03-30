@@ -1,0 +1,31 @@
+name: transition-to-prod
+on: 
+  release:
+    types: [published]
+    branches: [main]
+jobs:
+  transition-to-prod:
+    runs-on: ubuntu-latest
+  
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v3
+    
+      - name: Set up python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+ 
+      - name: Databricks CLI config
+        run:  |
+          pip install databricks-cli
+          cat > ~/.databrickscfg << EOF
+          [DEFAULT]
+          host = ${{ secrets.DATABRICKS_HOST_URL_PROD }}
+          token = ${{ secrets.DATABRICKS_TOKEN_PROD }}
+          jobs-api-version = 2.1
+          EOF
+          
+      - name: Run job to transition model to prod workspace
+        run:  |
+          databricks jobs run-now --job-id 573044277238851
