@@ -1,4 +1,4 @@
-name: model-quality
+name: transition-to-prod
 on: 
   release:
     types: [published]
