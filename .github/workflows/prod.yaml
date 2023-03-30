@@ -26,6 +26,6 @@ jobs:
           jobs-api-version = 2.1
           EOF
           
-      - name: Run job to check model quality in prod workspace
+      - name: Run job to transition model to prod workspace
         run:  |
           databricks jobs run-now --job-id 573044277238851
