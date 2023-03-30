@@ -4,7 +4,7 @@ on:
     types: [published]
     branches: [main]
 jobs:
-  check-model-quality:
+  transition-to-prod:
     runs-on: ubuntu-latest
   
     steps:
