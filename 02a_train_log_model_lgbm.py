@@ -4,6 +4,10 @@
 
 # COMMAND ----------
 
+# Trigger change : 30-Mar-23 12:48
+
+# COMMAND ----------
+
 # When you create the FeatureStoreClient, specify the remote workspaces with the arguments feature_store_uri and model_registry_uri.
 from databricks.feature_store import FeatureStoreClient
 
